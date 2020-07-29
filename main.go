@@ -1,126 +1,96 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"net/url"
+	"os"
 	"strconv"
 
-	"github.com/nlopes/slack"
+	"github.com/hokita/corona_slack/corona"
+	"github.com/hokita/corona_slack/webhook"
 )
 
 const (
-	coronaJPEndpoint      = "https://corona.lmao.ninja/v2/countries/JP"
-	coronaRankingEndpoint = "https://corona.lmao.ninja/v2/countries?sort=cases"
-	userAgent             = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36"
-	webhookURL            = ""
+	ExitCodeOK  = 0
+	ExitCodeErr = 1
 )
 
-// Corona struct
-type Corona struct {
-	Country     string `json:"country"`
-	Cases       int    `json:"cases"`
-	TodayCases  int    `json:"todayCases"`
-	Deaths      int    `json:"deaths"`
-	TodayDeaths int    `json:"todayDeaths"`
-}
-
 func main() {
-	jPByte := getByteFromAPI(coronaJPEndpoint)
-	var jp Corona
-	if err := json.Unmarshal(jPByte, &jp); err != nil {
-		log.Fatal(err)
-	}
-
-	rankingByte := getByteFromAPI(coronaRankingEndpoint)
-	var ranking []Corona
-	if err := json.Unmarshal(rankingByte, &ranking); err != nil {
-		log.Fatal(err)
-	}
-
-	sendCorona(jp)
-	sendCoronas(ranking[:5])
+	os.Exit(run())
 }
 
-func getByteFromAPI(endpoint string) []byte {
-	endpointURL, _ := url.Parse(endpoint)
-	req, _ := http.NewRequest("GET", endpointURL.String(), nil)
-	req.Header.Add("User-Agent", userAgent)
-	resp, err := http.DefaultClient.Do(req)
+func run() int {
+	webhookUrl := os.Getenv("SLACK_WEBHOOK_URL")
+	if webhookUrl == "" {
+		fmt.Fprintln(os.Stderr, "please set SLACK_WEBHOOK_URL")
+		return ExitCodeErr
+	}
+
+	crn := corona.New()
+
+	jp, err := crn.JP()
 	if err != nil {
-		log.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	// fmt.Println(reflect.TypeOf(resp.Body))
-
-	byte, _ := ioutil.ReadAll(resp.Body)
-
-	return byte
-}
-
-func sendCorona(corona Corona) {
-	country := fmt.Sprintf("*%s*", corona.Country)
-	cases := fmt.Sprintf("cases: %s", strconv.Itoa(corona.Cases))
-	todayCases := fmt.Sprintf("today cases: %s", strconv.Itoa(corona.TodayCases))
-	deaths := fmt.Sprintf("deaths: %s", strconv.Itoa(corona.Deaths))
-	todayDeaths := fmt.Sprintf("today deaths: %s", strconv.Itoa(corona.TodayDeaths))
-
-	text := fmt.Sprintf("%s\n%s\n%s\n%s\n%s", country, cases, todayCases, deaths, todayDeaths)
-
-	postSlack(text)
-}
-
-func sendCoronas(coronas []Corona) {
-	text := "*World Ranking*\n"
-	for i, corona := range coronas {
-		rank := fmt.Sprintf("rank: %s", strconv.Itoa(i+1))
-		country := corona.Country
-		cases := fmt.Sprintf("cases: %s", strconv.Itoa(corona.Cases))
-		todayCases := fmt.Sprintf("today cases: %s", strconv.Itoa(corona.TodayCases))
-		deaths := fmt.Sprintf("deaths: %s", strconv.Itoa(corona.Deaths))
-		todayDeaths := fmt.Sprintf("today deaths: %s", strconv.Itoa(corona.TodayDeaths))
-		text += fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n\n", rank, country, cases, todayCases, deaths, todayDeaths)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return ExitCodeErr
 	}
 
-	postSlack(text)
-}
-
-// postSlack function
-func postSlack(text string) error {
-	payload := &slack.WebhookMessage{
-		Attachments: []slack.Attachment{
-			{
-				Blocks: []slack.Block{
-					getResultSectionBlock(text),
-				},
-			},
-		},
-	}
-
-	err := slack.PostWebhook(webhookURL, payload)
+	ranking, err := crn.WorldRanking()
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return ExitCodeErr
 	}
 
-	return nil
+	if err := webhook.Post(webhookUrl, buildTxt(jp)); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return ExitCodeErr
+	}
+
+	for i, country := range ranking[:5] {
+		if err := webhook.Post(webhookUrl, buildRankingTxt(country, i+1)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return ExitCodeErr
+		}
+	}
+
+	fmt.Println("Done!!")
+	return ExitCodeOK
 }
 
-// getResultSectionBlock function
-func getResultSectionBlock(text string) slack.Block {
-	textBlockObject := slack.NewTextBlockObject(
-		"mrkdwn",
-		text,
-		false,
-		false,
-	)
-	section := slack.NewSectionBlock(
-		textBlockObject,
-		nil,
-		nil,
-	)
-	return section
+func buildTxt(country *corona.Country) string {
+	name := fmt.Sprintf("*%s*", country.Name)
+	cases := fmt.Sprintf("cases: %s", strconv.Itoa(country.Cases))
+	todayCases := fmt.Sprintf("today cases: %s", strconv.Itoa(country.TodayCases))
+	deaths := fmt.Sprintf("deaths: %s", strconv.Itoa(country.Deaths))
+	todayDeaths := fmt.Sprintf("today deaths: %s", strconv.Itoa(country.TodayDeaths))
+	text := fmt.Sprintf(`
+%s
+----------
+%s
+%s
+%s
+%s
+----------
+`,
+		name, cases, todayCases, deaths, todayDeaths)
+
+	return text
+}
+
+func buildRankingTxt(country *corona.Country, rank int) string {
+	r := fmt.Sprintf("%s", strconv.Itoa(rank))
+	name := fmt.Sprintf("*%s*", country.Name)
+	cases := fmt.Sprintf("cases: %s", strconv.Itoa(country.Cases))
+	todayCases := fmt.Sprintf("today cases: %s", strconv.Itoa(country.TodayCases))
+	deaths := fmt.Sprintf("deaths: %s", strconv.Itoa(country.Deaths))
+	todayDeaths := fmt.Sprintf("today deaths: %s", strconv.Itoa(country.TodayDeaths))
+	text := fmt.Sprintf(`
+%s. %s
+----------
+%s
+%s
+%s
+%s
+----------`,
+		r, name, cases, todayCases, deaths, todayDeaths)
+
+	return text
 }

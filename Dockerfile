@@ -1,13 +1,15 @@
-# raspberry pi上で動かすのでarm製を使用する。
-# FROM golang:1.13
-FROM alexellis2/go-armhf:1.7.4
+FROM golang:1.14
+
+ARG SLACK_WEBHOOK_URL
 
 ENV GOBIN /go/bin
-
-RUN go get github.com/nlopes/slack
-RUN go get github.com/PuerkitoBio/goquery
+ENV GO111MODULE=on
+ENV GOPATH=
+ENV SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL
 
 WORKDIR /go
 ADD . /go
 
-CMD ["go", "run", "main.go"]
+RUN go build -o main main.go
+
+CMD ["./main"]
