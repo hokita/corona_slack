@@ -1,4 +1,6 @@
-FROM golang:1.14
+FROM golang:1.15.6-alpine
+# For Raspberry Pi
+# FROM arm32v6/golang:1.15.6-alpine
 
 ARG SLACK_WEBHOOK_URL
 
@@ -10,6 +12,7 @@ ENV SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL
 WORKDIR /go
 ADD . /go
 
-RUN go build -o main main.go
+RUN go mod tidy
+RUN go build -o corona_slack main.go
 
-CMD ["./main"]
+CMD ./corona_slack

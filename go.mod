@@ -1,8 +1,5 @@
 module github.com/hokita/corona_slack
 
-go 1.14
+go 1.15
 
-require (
-	github.com/nlopes/slack v0.6.0
-	github.com/slack-go/slack v0.6.5
-)
+require github.com/slack-go/slack v0.7.4
